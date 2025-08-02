@@ -1,0 +1,127 @@
+# --- BƯỚC 1: CÀI ĐẶT VÀ TẠO DỮ LIỆU ---
+# Mục đích: Nhập các thư viện và tạo một bộ dữ liệu bán hàng giả lập.
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.model_selection import train_test_split
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import mean_absolute_error
+
+print("Bước 1: Đã nhập thư viện thành công.")
+
+# Tạo dữ liệu giả lập
+np.random.seed(42)
+date_range = pd.date_range(start='2022-01-01', end='2025-09-30', freq='D')
+skus = ['SKU-A01', 'SKU-B02', 'SKU-C03']
+data = []
+for date in date_range:
+    month_factor = 1.8 if date.month in [10, 11, 12] else 1 + (date.month - 1) / 12 * 0.5
+    time_factor = 1 + (date - date_range[0]).days / len(date_range) * 1.5
+    for sku in skus:
+        if sku == 'SKU-A01': base_quantity, unit_price = np.random.randint(50, 80), 120
+        elif sku == 'SKU-B02': base_quantity, unit_price = np.random.randint(20, 40), 250
+        else: base_quantity, unit_price = np.random.randint(5, 15), 500
+        quantity = int(base_quantity * month_factor * time_factor * (1 + np.random.rand() * 0.2))
+        data.append([date, sku, quantity, unit_price])
+df = pd.DataFrame(data, columns=['Date', 'SKU', 'Quantity', 'UnitPrice'])
+
+print("-> Dữ liệu bán hàng thô đã được tạo.")
+df.head()
+
+# --- BƯỚC 2: TIỀN XỬ LÝ VÀ TỔNG HỢP DỮ LIỆU ---
+# Mục đích: Nhóm dữ liệu từ hàng ngày thành hàng tháng để dự báo.
+
+df['Date'] = pd.to_datetime(df['Date'])
+df['Month'] = df['Date'].dt.to_period('M')
+monthly_sales = df.groupby(['Month', 'SKU']).agg(TotalQuantity=('Quantity', 'sum')).reset_index()
+monthly_sales['Month'] = monthly_sales['Month'].dt.to_timestamp()
+
+print("Bước 2: Dữ liệu đã được tổng hợp theo tháng thành công.")
+monthly_sales.head()
+
+# --- BƯỚC 3: PHÂN TÍCH DỮ LIỆU KHÁM PHÁ (EDA) ---
+# Mục đích: Vẽ biểu đồ để hiểu các đặc tính của dữ liệu.
+
+sns.set(style="whitegrid", palette="viridis")
+fig, axes = plt.subplots(3, 2, figsize=(18, 15))
+fig.suptitle('Bảng Phân Tích Dữ Liệu Bán Hàng của ABC Manufacturing', fontsize=20)
+
+# Biểu đồ 1: Xu hướng tổng số lượng bán hàng
+total_monthly_quantity = monthly_sales.groupby('Month')['TotalQuantity'].sum()
+axes[0, 0].plot(total_monthly_quantity.index, total_monthly_quantity.values, marker='.', linestyle='-')
+axes[0, 0].set_title('Biểu đồ 1: Xu hướng Bán hàng Tổng thể')
+axes[0, 0].set_ylabel('Tổng số lượng')
+
+# Biểu đồ 2: So sánh hiệu suất của từng SKU
+sns.lineplot(ax=axes[0, 1], data=monthly_sales, x='Month', y='TotalQuantity', hue='SKU', marker='o', ci=None)
+axes[0, 1].set_title('Biểu đồ 2: So sánh Số lượng bán theo từng SKU')
+
+# Biểu đồ 3: Phân tích mùa vụ
+monthly_sales['MonthOfYear'] = monthly_sales['Month'].dt.month
+sns.boxplot(ax=axes[1, 0], data=monthly_sales, x='MonthOfYear', y='TotalQuantity')
+axes[1, 0].set_title('Biểu đồ 3: Phân tích Mùa vụ theo Tháng')
+axes[1, 0].set_xlabel('Tháng trong năm')
+
+# Biểu đồ 4: Tăng trưởng theo năm
+monthly_sales['Year'] = monthly_sales['Month'].dt.year
+yearly_sales = monthly_sales.groupby('Year')['TotalQuantity'].sum()
+sns.barplot(ax=axes[1, 1], x=yearly_sales.index, y=yearly_sales.values)
+axes[1, 1].set_title('Biểu đồ 4: Tăng trưởng Doanh số theo Năm')
+
+# Biểu đồ 5: Phân phối số lượng bán
+sns.histplot(ax=axes[2, 0], data=monthly_sales[monthly_sales['SKU'] == 'SKU-A01'], x='TotalQuantity', kde=True)
+axes[2, 0].set_title("Biểu đồ 5: Phân phối SL bán hàng tháng của SKU-A01")
+
+# Biểu đồ 6: Tỷ trọng các sản phẩm
+sku_quantity = monthly_sales.groupby('SKU')['TotalQuantity'].sum()
+axes[2, 1].pie(sku_quantity, labels=sku_quantity.index, autopct='%1.1f%%', startangle=90)
+axes[2, 1].set_title('Biểu đồ 6: Tỷ trọng Số lượng bán theo SKU')
+axes[2, 1].set_ylabel('')
+
+print("Bước 3: Đã vẽ xong các biểu đồ phân tích.")
+plt.tight_layout(rect=[0, 0, 1, 0.96])
+plt.show()
+
+# --- BƯỚC 4: KỸ THUẬT ĐẶC TRƯNG ---
+# Mục đích: Tạo các biến đầu vào (features) cho mô hình từ dữ liệu thời gian.
+
+df_model = monthly_sales[monthly_sales['SKU'] == 'SKU-A01'].copy()
+df_model.set_index('Month', inplace=True)
+df_model['time_index'] = np.arange(len(df_model))
+df_model['month_of_year'] = df_model.index.month
+df_model['lag_1'] = df_model['TotalQuantity'].shift(1)
+df_model['rolling_mean_3'] = df_model['TotalQuantity'].rolling(window=3).mean().shift(1)
+df_model.dropna(inplace=True)
+
+print("Bước 4: Đã tạo xong các đặc trưng cho mô hình.")
+df_model.head()
+
+# --- BƯỚC 5: HUẤN LUYỆN VÀ ĐÁNH GIÁ MÔ HÌNH ---
+# Mục đích: Dạy mô hình trên dữ liệu quá khứ và kiểm tra độ chính xác của nó.
+
+features = ['time_index', 'month_of_year', 'lag_1', 'rolling_mean_3']
+target = 'TotalQuantity'
+X = df_model[features]
+y = df_model[target]
+
+split_point = int(len(X) * 0.8)
+X_train, X_test = X[:split_point], X[split_point:]
+y_train, y_test = y[:split_point], y[split_point:]
+
+model = LinearRegression()
+model.fit(X_train, y_train)
+predictions = model.predict(X_test)
+mae = mean_absolute_error(y_test, predictions)
+
+print(f"Bước 5: Đã huấn luyện và đánh giá mô hình xong.")
+print(f"-> Mean Absolute Error (MAE): {mae:.2f}")
+
+plt.figure(figsize=(15, 7))
+plt.plot(y_train.index, y_train.values, label='Dữ liệu huấn luyện (Đã biết)')
+plt.plot(y_test.index, y_test.values, label='Doanh số thực tế (Dùng để kiểm tra)', color='green', marker='o')
+plt.plot(y_test.index, predictions, label='Dự đoán của mô hình', color='red', linestyle='--', marker='x')
+plt.title('Biểu đồ 7: So sánh kết quả Thực tế và Dự đoán của Mô hình', fontsize=16)
+plt.legend()
+plt.show()
